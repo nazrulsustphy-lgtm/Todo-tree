@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+<title>FlowTree OS - Multi-Sheet Vertical (Enhanced)</title>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap" rel="stylesheet">
+
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+
+<style>
+:root {
+  --bg: #f8fafc; --dot: #cbd5e1; --accent: #6366f1;
+  --node-bg: #ffffff; --tx: #0f172a; --bd: #e2e8f0;
+  --node-sh: 0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -4px rgba(0,0,0,0.1);
+  --success: #00ff88;
+  --progress-bright: #4ade80; 
+}
+[data-theme="dark"] {
+  --bg: #020617; --dot: #1e293b; --node-bg: #1e293b; --tx: #f8fafc; --bd: #334155;
+  --success: #00ffaa;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; touch-action: pan-x pan-y; }
+body { 
+  font-family: 'Plus Jakarta Sans', sans-serif; background: var(--bg);
+  overflow: hidden; height: 100vh; width: 100vw; color: var(--tx);
+}
+
+#canvas-container {
+  width: 100%; height: 100%; position: relative; cursor: crosshair; overflow: hidden;
+  background-image: radial-gradient(var(--dot) 1px, transparent 1px);
+  background-size: 30px 30px;
+}
+#workspace { 
+  position: absolute; top: 0; left: 0; transform-origin: 0 0; 
+  will-change: transform;
+}
+
+.glass-nav {
+  position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 1000;
+  display: flex; gap: 8px; background: rgba(255,255,255,0.7);
+  backdrop-filter: blur(10px); padding: 8px 16px; border-radius: 100px;
+  border: 1px solid var(--bd); box-shadow: var(--node-sh); align-items: center;
+  max-width: 95vw; flex-wrap: nowrap; overflow-x: auto;
+}
+.search-box {
+  background: var(--bg); border: 1px solid var(--bd); padding: 6px 12px;
+  border-radius: 20px; font-size: 16px;
+  outline: none; color: var(--tx); min-width: 100px;
+}
+
+.sheet-bar {
+  position: fixed; bottom: 20px; left: 20px; z-index: 1000;
+  display: flex; gap: 5px; background: rgba(255,255,255,0.8);
+  backdrop-filter: blur(10px); padding: 6px; border-radius: 12px;
+  border: 1px solid var(--bd); box-shadow: var(--node-sh);
+}
+.sheet-tab {
+  padding: 8px 18px; border-radius: 8px; font-size: 15px;
+  font-weight: 600; cursor: pointer; transition: 0.2s; border: 1px solid transparent;
+  display: flex; align-items: center; gap: 8px; color: var(--tx);
+}
+.sheet-tab.active { background: var(--accent); color: white; }
+
+.node {
+  position: absolute; width: 320px;
+  background: var(--node-bg); border-radius: 16px; border: 1px solid var(--bd);
+  box-shadow: var(--node-sh); cursor: grab; user-select: none; z-index: 10;
+  overflow: hidden;
+}
+
+.node-header {
+  padding: 12px; display: flex; flex-direction: column; gap: 8px;
+  border-bottom: 1px solid var(--bd); background: rgba(0,0,0,0.02);
+}
+
+.progress-container {
+  width: 100%; height: 8px; background: #eee; border-radius: 4px; overflow: hidden; margin-top: 4px;
+}
+.progress-bar-fill {
+  height: 100%; transition: width 0.4s ease, background 0.3s ease, box-shadow 0.3s ease;
+}
+
+.node-body { padding: 15px; }
+
+.node-input {
+  width: 100%; background: transparent; border: none; color: var(--tx);
+  font-size: 22px;
+  font-weight: 800; outline: none;
+}
+
+.node-notes {
+  width: 100%; min-height: 50px; margin-top: 10px; padding: 10px;
+  border-radius: 8px; border: 1px dashed var(--bd);
+  background: rgba(0,0,0,0.02); color: var(--tx);
+  font-size: 15px;
+  resize: vertical; outline: none;
+}
+
+svg#svg-layer { position: absolute; top: 0; left: 0; width: 10000px; height: 10000px; pointer-events: none; z-index: -1; }
+.link-path { fill: none; stroke-linecap: round; }
+.link-path.active { stroke: var(--accent); stroke-width: 5; stroke-dasharray: 8; animation: flow 2s linear infinite; }
+.link-path.completed { stroke: var(--success); stroke-width: 6; filter: drop-shadow(0 0 5px var(--success)); }
+
+@keyframes flow { from { stroke-dashoffset: 100; } to { stroke-dashoffset: 0; } }
+
+button {
+  padding: 10px 20px; border-radius: 50px; border: none;
+  background: var(--accent); color: white; cursor: pointer;
+  font-weight: 600; font-size: 15px;
+  white-space: nowrap;
+}
+
+#sync-status { font-size: 12px; margin-left: 10px; color: #10b981; font-weight: 800; }
+
+@media (max-width: 600px) {
+    .glass-nav { padding: 6px 12px; gap: 5px; }
+    .node { width: 280px; }
+    button { padding: 8px 12px; font-size: 14px; }
+}
+</style>
+</head>
+<body data-theme="light">
+
+<div class="glass-nav">
+  <input type="text" class="search-box" id="global-search" placeholder="Find..." oninput="searchAndFly()">
+  <button onclick="addNode()">+ Root</button>
+  <button onclick="autoAlign()" style="background:#10b981">Align</button>
+  <button onclick="exportJSON()" style="background:#4b5563">Export</button>
+  <button onclick="toggleTheme()" style="background:#0f172a">🌓</button>
+  <span id="sync-status">● Cloud Live</span>
+</div>
+
+<div id="canvas-container">
+  <div id="workspace">
+    <svg id="svg-layer"></svg>
+  </div>
+</div>
+
+<div class="sheet-bar" id="sheet-bar"></div>
+
+<script>
+// --- FIREBASE CONFIGURATION ---
+const firebaseConfig = {
+  apiKey: "AIzaSyAFM8J6KnAI64DVsafFAJxGWNG8s1inlRM",
+  authDomain: "flowtree-9cd54.firebaseapp.com",
+  databaseURL: "https://flowtree-9cd54-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "flowtree-9cd54",
+  storageBucket: "flowtree-9cd54.firebasestorage.app",
+  messagingSenderId: "842618543946",
+  appId: "1:842618543946:web:f6bc8e39d5bf97a1136bb3",
+  measurementId: "G-Y14FCJCNF1"
+};
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
+let sheets = [{ id: 'sheet-1', name: 'Sheet 1', nodes: [] }];
+let activeSheetId = 'sheet-1';
+let isRemoteChange = false;
+
+let scale = 1, targetScale = 1;
+let offset = { x: window.innerWidth/10, y: window.innerHeight/10 }, targetOffset = { ...offset };
+
+const workspace = document.getElementById('workspace');
+const svgLayer = document.getElementById('svg-layer');
+
+// --- REALTIME SYNC LOGIC ---
+db.ref('flowtree_v3').on('value', (snapshot) => {
+    const data = snapshot.val();
+    if (data) {
+        isRemoteChange = true;
+        sheets = data.sheets || sheets;
+        activeSheetId = data.activeSheetId || activeSheetId;
+        updateSheetsUI();
+        render();
+        isRemoteChange = false;
+        document.getElementById('sync-status').innerText = "✓ Synced";
+    }
+});
+
+function save() {
+    if (isRemoteChange) return;
+    document.getElementById('sync-status').innerText = "Saving...";
+    db.ref('flowtree_v3').set({
+        sheets: sheets,
+        activeSheetId: activeSheetId
+    });
+}
+
+function getNodes() {
+    const sheet = sheets.find(s => s.id === activeSheetId);
+    return sheet ? sheet.nodes : [];
+}
+
+function updateSheetsUI() {
+    const bar = document.getElementById('sheet-bar');
+    bar.innerHTML = '';
+    sheets.forEach(s => {
+        const tab = document.createElement('div');
+        tab.className = `sheet-tab ${s.id === activeSheetId ? 'active' : ''}`;
+        tab.innerHTML = `
+            <span onclick="switchSheet('${s.id}')">${s.name}</span>
+            ${sheets.length > 1 ? `<span onclick="deleteSheet('${s.id}')" style="opacity:0.5; font-size:12px; margin-left:8px">✕</span>` : ''}
+        `;
+        bar.appendChild(tab);
+    });
+    
+    const addBtn = document.createElement('div');
+    addBtn.className = 'sheet-tab';
+    addBtn.style.background = '#10b981';
+    addBtn.style.color = 'white';
+    addBtn.innerText = '+';
+    addBtn.onclick = createSheet;
+    bar.appendChild(addBtn);
+}
+
+function createSheet() {
+    const id = 'sheet-' + Date.now();
+    sheets.push({ id, name: `Sheet ${sheets.length + 1}`, nodes: [] });
+    switchSheet(id);
+}
+
+function switchSheet(id) {
+    activeSheetId = id;
+    updateSheetsUI();
+    render();
+    save();
+}
+
+function deleteSheet(id) {
+    if (sheets.length <= 1) return;
+    sheets = sheets.filter(s => s.id !== id);
+    if (activeSheetId === id) activeSheetId = sheets[0].id;
+    save();
+}
+
+function addNode(parentId = null) {
+  const id = 'task-' + Date.now();
+  let x = -offset.x + 50, y = -offset.y + 150;
+  const nodes = getNodes();
+
+  if(parentId) {
+    const p = nodes.find(n => n.id === parentId);
+    x = p.x + (nodes.filter(n => n.parentId === parentId).length * 280); 
+    y = p.y + 250;
+  }
+
+  nodes.push({ id, parentId, x, y, title: parentId ? "Sub-Component" : "New Strategy", notes: "", done: false });
+  resolveCollisions();
+  render();
+  save();
+}
+
+function resolveCollisions() {
+  const nodes = getNodes();
+  const padding = 40;
+  const width = 280;
+  const height = 180;
+
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = 0; j < nodes.length; j++) {
+      if (i === j) continue;
+      let n1 = nodes[i], n2 = nodes[j];
+      let dx = (n1.x + width/2) - (n2.x + width/2);
+      let dy = (n1.y + height/2) - (n2.y + height/2);
+      
+      if (Math.abs(dx) < width + padding && Math.abs(dy) < height + padding) {
+        n1.x += dx > 0 ? 30 : -30;
+        n1.y += dy > 0 ? 30 : -30;
+      }
+    }
+  }
+}
+
+function render() {
+  document.querySelectorAll('.node').forEach(n => n.remove());
+  const nodes = getNodes();
+  
+  nodes.forEach(node => {
+    const children = nodes.filter(n => n.parentId === node.id);
+    const progressPct = children.length > 0 
+      ? (children.filter(c => c.done).length / children.length) * 100 
+      : (node.done ? 100 : 0);
+    
+    const isCompleted = progressPct === 100;
+    const progressColor = isCompleted ? 'var(--success)' : 'var(--accent)';
+    const shadowEffect = isCompleted ? '0 0 12px var(--success)' : 'none';
+
+    const el = document.createElement('div');
+    el.className = 'node';
+    el.id = node.id;
+    if(isCompleted) el.style.borderColor = 'var(--success)';
+    el.style.left = node.x + 'px'; el.style.top = node.y + 'px';
+    
+    el.innerHTML = `
+      <div class="node-header">
+        <input class="node-input" value="${node.title}" oninput="updateNode('${node.id}', 'title', this.value)">
+        <div class="progress-container">
+            <div class="progress-bar-fill" style="width: ${progressPct}%; background: ${progressColor}; box-shadow: ${shadowEffect};"></div>
+        </div>
+      </div>
+      <div class="node-body">
+        <textarea class="node-notes" placeholder="Notes..." oninput="updateNode('${node.id}', 'notes', this.value)">${node.notes || ''}</textarea>
+        <div style="margin-top:15px; display:flex; gap:8px;">
+          <button onclick="addNode('${node.id}')" style="padding:6px 10px;">+ Sub</button>
+          <button onclick="toggleDone('${node.id}')" style="padding:6px 10px; background:${node.done ? '#6366f1' : '#10b981'}">${node.done ? '⟲' : '✓'}</button>
+          <button onclick="deleteNode('${node.id}')" style="padding:6px 10px; background:#ef4444">✕</button>
+        </div>
+      </div>
+    `;
+
+    el.onmousedown = (e) => {
+      if(['INPUT', 'BUTTON', 'TEXTAREA'].includes(e.target.tagName)) return;
+      startDragging(e, node);
+    };
+
+    el.ontouchstart = (e) => {
+      if(['INPUT', 'BUTTON', 'TEXTAREA'].includes(e.target.tagName)) return;
+      startDragging(e.touches[0], node, true);
+    };
+
+    workspace.appendChild(el);
+  });
+  drawLinks();
+}
+
+function startDragging(e, node, isTouch = false) {
+  let sx = e.clientX, sy = e.clientY;
+  
+  const move = (ev) => {
+    const pointer = isTouch ? ev.touches[0] : ev;
+    node.x += (pointer.clientX - sx) / scale;
+    node.y += (pointer.clientY - sy) / scale;
+    sx = pointer.clientX; sy = pointer.clientY;
+    render();
+  };
+
+  const stop = () => {
+    if(isTouch) {
+        document.removeEventListener('touchmove', move);
+        document.removeEventListener('touchend', stop);
+    } else {
+        document.removeEventListener('mousemove', move);
+        document.removeEventListener('mouseup', stop);
+    }
+    resolveCollisions();
+    render();
+    save();
+  };
+
+  if(isTouch) {
+    document.addEventListener('touchmove', move, { passive: false });
+    document.addEventListener('touchend', stop);
+  } else {
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', stop);
+  }
+}
+
+function drawLinks() {
+  svgLayer.innerHTML = '';
+  const nodes = getNodes();
+  nodes.forEach(node => {
+    if(node.parentId) {
+      const parent = nodes.find(n => n.id === node.parentId);
+      if(parent) {
+        const x1 = parent.x + 160, y1 = parent.y + 160;
+        const x2 = node.x + 160, y2 = node.y;
+        const cp1y = y1 + (y2 - y1) / 2;
+        const d = `M ${x1} ${y1} C ${x1} ${cp1y}, ${x2} ${cp1y}, ${x2} ${y2}`;
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", d);
+        let statusClass = node.done ? 'link-path completed' : 'link-path active';
+        path.setAttribute("class", statusClass);
+        svgLayer.appendChild(path);
+      }
+    }
+  });
+}
+
+function update() {
+  scale += (targetScale - scale) * 0.15;
+  offset.x += (targetOffset.x - offset.x) * 0.15;
+  offset.y += (targetOffset.y - offset.y) * 0.15;
+  workspace.style.transform = `scale(${scale}) translate(${offset.x}px, ${offset.y}px)`;
+  requestAnimationFrame(update);
+}
+update();
+
+document.addEventListener('wheel', e => {
+  e.preventDefault();
+  const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+  targetScale = Math.min(Math.max(targetScale * zoomFactor, 0.1), 5);
+}, { passive: false });
+
+let initialPinchDistance = null;
+document.addEventListener('touchmove', (e) => {
+  if (e.touches.length === 2) {
+    const dist = Math.hypot(
+      e.touches[0].pageX - e.touches[1].pageX,
+      e.touches[0].pageY - e.touches[1].pageY
+    );
+    if (initialPinchDistance === null) {
+      initialPinchDistance = dist;
+    } else {
+      const zoomFactor = dist / initialPinchDistance;
+      targetScale = Math.min(Math.max(targetScale * zoomFactor, 0.1), 5);
+      initialPinchDistance = dist;
+    }
+  }
+}, { passive: false });
+
+document.addEventListener('touchend', () => {
+  initialPinchDistance = null;
+});
+
+function autoAlign() {
+  const nodes = getNodes();
+  const rootNodes = nodes.filter(n => !n.parentId);
+  let currentX = 100;
+  rootNodes.forEach((root) => {
+    root.y = 100;
+    root.x = currentX;
+    const branchWidth = calculateBranchWidth(root.id);
+    alignChildren(root.id, currentX, 100);
+    currentX += Math.max(branchWidth, 350); 
+  });
+  render();
+  save();
+}
+
+function calculateBranchWidth(pId) {
+  const nodes = getNodes();
+  const children = nodes.filter(n => n.parentId === pId);
+  if (children.length === 0) return 350;
+  return children.reduce((acc, c) => acc + calculateBranchWidth(c.id), 0);
+}
+
+function alignChildren(pId, px, py) {
+  const nodes = getNodes();
+  const children = nodes.filter(n => n.parentId === pId);
+  let childX = px;
+  children.forEach((c) => {
+    c.y = py + 300;
+    c.x = childX;
+    const subWidth = calculateBranchWidth(c.id);
+    alignChildren(c.id, childX, c.y);
+    childX += Math.max(subWidth, 350);
+  });
+}
+
+function searchAndFly() {
+  const nodes = getNodes();
+  const query = document.getElementById('global-search').value.toLowerCase();
+  const target = nodes.find(n => n.title.toLowerCase().includes(query));
+  if(target) {
+    targetScale = 1.2;
+    targetOffset.x = -target.x + (window.innerWidth / 2) / 1.2;
+    targetOffset.y = -target.y + (window.innerHeight / 2) / 1.2;
+  }
+}
+
+function toggleDone(id) {
+  const nodes = getNodes();
+  const n = nodes.find(n => n.id === id);
+  if(n) n.done = !n.done;
+  render(); save();
+}
+
+function deleteNode(id) {
+  let nodes = getNodes();
+  const filtered = nodes.filter(n => n.id !== id && n.parentId !== id);
+  sheets.find(s => s.id === activeSheetId).nodes = filtered;
+  render(); save();
+}
+
+function updateNode(id, key, val) {
+  const nodes = getNodes();
+  const n = nodes.find(n => n.id === id);
+  if(n) n[key] = val;
+  save();
+}
+
+function toggleTheme() {
+  document.body.dataset.theme = document.body.dataset.theme === 'dark' ? 'light' : 'dark';
+}
+
+function exportJSON() {
+  const blob = new Blob([JSON.stringify(sheets, null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'flowtree-enhanced.json';
+  a.click();
+}
+
+const startPanning = (e, isTouch = false) => {
+  if (e.target.id === 'canvas-container' || e.target.id === 'workspace') {
+    let sx = isTouch ? e.touches[0].clientX : e.clientX;
+    let sy = isTouch ? e.touches[0].clientY : e.clientY;
+    
+    const move = (ev) => {
+      const p = isTouch ? ev.touches[0] : ev;
+      targetOffset.x += (p.clientX - sx) / scale;
+      targetOffset.y += (p.clientY - sy) / scale;
+      sx = p.clientX; sy = p.clientY;
+    };
+
+    const stop = () => {
+      document.onmousemove = null;
+      document.removeEventListener('touchmove', move);
+    };
+
+    if(isTouch) {
+        document.addEventListener('touchmove', move, { passive: false });
+        document.addEventListener('touchend', stop);
+    } else {
+        document.onmousemove = move;
+        document.onmouseup = stop;
+    }
+  }
+};
+
+document.onmousedown = (e) => startPanning(e, false);
+document.ontouchstart = (e) => {
+    if(e.touches.length === 1) startPanning(e, true);
+};
+
+window.oncontextmenu = (e) => e.preventDefault();
+updateSheetsUI();
+render();
+</script>
+</body>
+</html>
